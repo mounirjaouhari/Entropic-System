@@ -1,0 +1,39 @@
+# Dependencies
+vendor/
+node_modules/
+composer.lock
+package-lock.json
+
+# Environment
+.env
+.env.*
+!.env.example
+
+# Docker volumes
+data/
+db/
+cache/
+nifi/
+logs/
+
+# Laravel
+bootstrap/cache/
+storage/
+*.log
+.rnd
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Project specific
+*.sql.gz
+dump.rdb
+*.bak
