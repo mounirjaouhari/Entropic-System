@@ -1,120 +1,247 @@
+version: '3.9'
 
 services:
-  zookeeper:
-    image: confluentinc/cp-zookeeper:7.3.0
-    container_name: zookeeper
+  # Main application service with security hardening and performance optimization
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: entropic-system-app
+    restart: unless-stopped
+    
+    # Health check configuration
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    
+    # Resource limits and reservations
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+        reservations:
+          cpus: '1'
+          memory: 1G
+    
+    # Port mapping
+    ports:
+      - "8000:8000"
+    
+    # Environment variables for configuration
     environment:
-      ZOOKEEPER_CLIENT_PORT: 2181
-      ZOOKEEPER_TICK_TIME: 2000
-    ports:
-      - "2181:2181"
-    networks:
-      - cachesys
+      - APP_ENV=production
+      - APP_DEBUG=false
+      - LOG_LEVEL=info
+      - DATABASE_HOST=db
+      - DATABASE_PORT=5432
+      - DATABASE_NAME=entropic_db
+      - DATABASE_USER=entropic_user
+      - REDIS_HOST=redis
+      - REDIS_PORT=6379
+      - WORKERS=4
+      - TIMEOUT=30
+    
+    # Security options
+    security_opt:
+      - no-new-privileges:true
+    
+    # Read-only root filesystem (optional, adjust if app needs writes)
+    read_only: false
+    
+    # Drop unnecessary capabilities
+    cap_drop:
+      - ALL
+    cap_add:
+      - NET_BIND_SERVICE
+    
+    # Volume mounts
     volumes:
-      - ./volumes/zookeeper:/var/lib/zookeeper/data
-
-  broker:
-    image: confluentinc/cp-kafka:7.3.0
-    container_name: broker
-    restart: always
-    ports:
-      - "9092:9092"
+      - ./src:/app/src:ro
+      - app_cache:/app/cache
+      - app_logs:/app/logs
+    
     depends_on:
-      - zookeeper
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    
+    networks:
+      - entropic-network
+    
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  # PostgreSQL database service
+  db:
+    image: postgres:16-alpine
+    container_name: entropic-system-db
+    restart: unless-stopped
+    
+    # Health check for database
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U entropic_user -d entropic_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          cpus: '1'
+          memory: 1G
+        reservations:
+          cpus: '0.5'
+          memory: 512M
+    
+    # Environment variables
     environment:
-      KAFKA_BROKER_ID: 1
-      KAFKA_ZOOKEEPER_CONNECT: 'zookeeper:2181'
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: PLAINTEXT:PLAINTEXT,PLAINTEXT_INTERNAL:PLAINTEXT
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092,PLAINTEXT_INTERNAL://broker:29092
-      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
-      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
-      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
-    networks:
-      - cachesys
-
-  mongo1:
-    image: mongo:6.0
-    container_name: mongo1
-    ports:
-      - "27017:27017"
+      - POSTGRES_USER=entropic_user
+      - POSTGRES_PASSWORD=${DB_PASSWORD:-secure_password_change_me}
+      - POSTGRES_DB=entropic_db
+      - POSTGRES_INITDB_ARGS=-c shared_buffers=256MB -c effective_cache_size=1GB
+    
+    # Security options
+    security_opt:
+      - no-new-privileges:true
+    
+    # Volume for data persistence
     volumes:
-      - ./volumes/db/db1:/data/db
-    restart: always
-    command: --replSet rs0 --bind_ip_all --port 27017
+      - postgres_data:/var/lib/postgresql/data
+      - ./scripts/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    
     networks:
-      - cachesys
+      - entropic-network
+    
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
-  mongo2:
-    image: mongo:6.0
-    container_name: mongo2
-    ports:
-      - "27018:27018"
-    volumes:
-      - ./volumes/db/db2:/data/db
-    restart: always
-    command: --replSet rs0 --bind_ip_all --port 27018
-    networks:
-      - cachesys
-
-  mongo3:
-    image: mongo:6.0
-    container_name: mongo3
-    ports:
-      - "27019:27019"
-    volumes:
-      - ./volumes/db/db3:/data/db
-    restart: always
-    command: --replSet rs0 --bind_ip_all --port 27019
-    networks:
-      - cachesys
-
-  mysql:
-    image: mysql:8.0
-    container_name: mysql
-    restart: always
-    environment:
-      MYSQL_DATABASE: 'cachesystem'
-      MYSQL_USER: 'youness'
-      MYSQL_PASSWORD: 'doronbola'
-      MYSQL_ROOT_PASSWORD: 'Bgj5WL#F8Ztaz'
-    ports:
-      - "3306:3306"
-    volumes:
-      - ./volumes/data:/var/lib/mysql
-    networks:
-      - cachesys
-
-  nifi:
-    container_name: nifi
-    image: 'apache/nifi:1.23.2'
-    ports:
-      - 9443:9443
-    environment:
-      - SINGLE_USER_CREDENTIALS_USERNAME=admin
-      - SINGLE_USER_CREDENTIALS_PASSWORD=ctsBtRBKHRAx69EqUghvvgEvjnaLjFEB
-      - NIFI_WEB_HTTPS_PORT=9443
-    restart: on-failure
-    volumes:
-      - ./volumes/nifi/database_repository:/opt/nifi/nifi-current/database_repository
-      - ./volumes/nifi/flowfile_repository:/opt/nifi/nifi-current/flowfile_repository
-      - ./volumes/nifi/content_repository:/opt/nifi/nifi-current/content_repository
-      - ./volumes/nifi/provenance_repository:/opt/nifi/nifi-current/provenance_repository
-      - ./volumes/nifi/state:/opt/nifi/nifi-current/state
-      - ./volumes/nifi/logs:/opt/nifi/nifi-current/logs
-      
-    networks:
-      - cachesys
-
+  # Redis cache service
   redis:
-    image: redis:7.0
-    container_name: redis
-    ports:
-      - "6379:6379"
+    image: redis:7-alpine
+    container_name: entropic-system-redis
+    restart: unless-stopped
+    
+    # Health check for Redis
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 512M
+        reservations:
+          cpus: '0.25'
+          memory: 256M
+    
+    # Security options
+    security_opt:
+      - no-new-privileges:true
+    
+    # Command with security and performance options
+    command: redis-server
+      --appendonly yes
+      --appendfsync everysec
+      --maxmemory 512mb
+      --maxmemory-policy allkeys-lru
+      --requirepass ${REDIS_PASSWORD:-redis_secure_password}
+    
+    # Volume for persistence
     volumes:
-      - ./volumes/cache:/data
+      - redis_data:/data
+    
     networks:
-      - cachesys
+      - entropic-network
+    
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
 
+  # Optional: Nginx reverse proxy for production
+  nginx:
+    image: nginx:1.25-alpine
+    container_name: entropic-system-nginx
+    restart: unless-stopped
+    
+    # Health check
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://localhost/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+        reservations:
+          cpus: '0.25'
+          memory: 128M
+    
+    ports:
+      - "80:80"
+      - "443:443"
+    
+    security_opt:
+      - no-new-privileges:true
+    
+    volumes:
+      - ./nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./nginx/conf.d:/etc/nginx/conf.d:ro
+      - nginx_cache:/var/cache/nginx
+    
+    depends_on:
+      - app
+    
+    networks:
+      - entropic-network
+    
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+# Named volumes for data persistence
+volumes:
+  postgres_data:
+    driver: local
+  redis_data:
+    driver: local
+  app_cache:
+    driver: local
+  app_logs:
+    driver: local
+  nginx_cache:
+    driver: local
+
+# Custom network for service communication
 networks:
-  cachesys:
-    external: true
+  entropic-network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.20.0.0/16
